@@ -128,7 +128,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
     login_email_response = send_email_token(premise_id, email_address)
-    if login_email_response.status_code == 400:
+    if login_email_response.status_code == 200:
         email_token = get_email_token(email_address, password, email_server, email_port)
         if email_token:
             login_response = login_with_email_token(email_token)
