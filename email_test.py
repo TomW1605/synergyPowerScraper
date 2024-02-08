@@ -1,5 +1,6 @@
 import re
 import time
+import datetime
 
 import requests
 import imaplib
@@ -8,6 +9,9 @@ from email.header import decode_header
 
 import sys
 
+start_date = (datetime.date.today() - datetime.timedelta(days=2))
+start_time = datetime.datetime.combine(start_date, datetime.datetime.min.time())
+end_date = datetime.date.today()
 
 # Function to send a login email token
 def send_email_token(premise_id, email_address):
@@ -86,12 +90,63 @@ def get_email_token(email_address, password, email_server, email_port, timeout=1
 
 
 # Function to login with email token
-def login_with_email_token(email_token):
+def login_with_email_token(email_token, allow_contract):
     print("Login with email token")
     login_url = "https://selfserve.synergy.net.au/apps/rest/emailLogin/loginWithEmailToken"
     login_payload = {'emailToken': email_token}
-    login_response = requests.post(login_url, json=login_payload)
+    login_response = requests.post(login_url, json=login_payload, headers={'Content-Type': 'application/json', 'Allow-Contract': allow_contract})
     return login_response
+
+
+# Function to get contract account number
+def get_contract_account_number(cookies):
+    print("Getting contract account number")
+    index_json_url = "https://selfserve.synergy.net.au/apps/rest/account/index.json"
+    index_json_response = requests.get(index_json_url, cookies=cookies)
+    if index_json_response.status_code == 200:
+        json_data = index_json_response.json()
+        contract_account_number = json_data[0]['contractAccountNumber']
+        if contract_account_number:
+            print(f"Contract Account Number: {contract_account_number}")
+            return contract_account_number
+        else:
+            raise Exception("Contract Account Number not found in response JSON.")
+    else:
+        raise Exception(f"Failed to retrieve contract account number. Status code: {index_json_response.status_code}")
+
+
+# Function to get device ID
+def get_device_id(contract_account_number, cookies):
+    print("Getting device ID")
+    account_json_url = f"https://selfserve.synergy.net.au/apps/rest/account/{contract_account_number}/show.json"
+    account_json_response = requests.get(account_json_url, cookies=cookies)
+    if account_json_response.status_code == 200:
+        json_data = account_json_response.json()
+        device_id = json_data['installationDetails']['intervalDevices'][0]['deviceId']
+        if device_id:
+            print(f"Device ID: {device_id}")
+            return device_id
+        else:
+            raise Exception("Device ID not found in response JSON.")
+    else:
+        raise Exception(f"Failed to retrieve device ID. Status code: {account_json_response.status_code}")
+
+
+# Function to get usage data
+def get_usage_data(contract_account_number, device_id, start_date, end_date, cookies):
+    print("Getting usage data")
+    usage_json_url = f"https://selfserve.synergy.net.au/apps/rest/intervalData/{contract_account_number}/getHalfHourlyElecIntervalData?intervalDeviceIds={device_id}&startDate={
+        start_date.strftime("%Y-%m-%d")}&endDate={end_date.strftime("%Y-%m-%d")}"
+    usage_json_response = requests.get(usage_json_url, cookies=cookies)
+    if usage_json_response.status_code == 200:
+        json_data = usage_json_response.json()
+        if json_data:
+            print(f"Usage Data: {json_data}")
+            return json_data
+        else:
+            raise Exception("Device ID not found in response JSON.")
+    else:
+        raise Exception(f"Failed to retrieve usage data. Status code: {usage_json_response.status_code}")
 
 
 if __name__ == "__main__":
@@ -131,10 +186,20 @@ if __name__ == "__main__":
     if login_email_response.status_code == 200:
         email_token = get_email_token(email_address, password, email_server, email_port)
         if email_token:
-            login_response = login_with_email_token(email_token)
+            login_response = login_with_email_token(email_token, login_email_response.headers.get("Allow-Contract"))
             if login_response.status_code == 200:
-                print("Login successful!")
+                # print("Login successful!")
+                cookies = login_response.cookies
+                contract_account_number = get_contract_account_number(cookies)
+                if contract_account_number:
+                    device_id = get_device_id(contract_account_number, cookies)
+                    if device_id:
+                        usage_data = get_usage_data(contract_account_number, device_id, start_date, end_date, cookies)
+                        print(usage_data)
+                        print(usage_data)
             else:
-                print("Failed to login with email token.")
+                raise Exception("Failed to login with email token.")
+    elif login_email_response.status_code == 400 and "you have had too many attempts" in login_email_response.text:
+        print("Too many attempts, try again tomorrow.")
     else:
-        print("Web server response did not meet expected conditions.")
+        raise Exception("Web server response did not meet expected conditions.")
