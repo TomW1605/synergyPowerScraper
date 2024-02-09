@@ -5,13 +5,13 @@ import datetime
 import requests
 import imaplib
 import email
-from email.header import decode_header
 
 import sys
 
 start_date = (datetime.date.today() - datetime.timedelta(days=2))
 start_time = datetime.datetime.combine(start_date, datetime.datetime.min.time())
 end_date = datetime.date.today()
+
 
 # Function to send a login email token
 def send_email_token(premise_id, email_address):
@@ -37,7 +37,7 @@ def get_email_token(email_address, password, email_server, email_port, timeout=1
             break
 
         # Search for emails with a specific subject
-        status, messages = mail.search(None, '(UNSEEN SUBJECT "Your Synergy One-time Passcode")') #UNSEEN
+        status, messages = mail.search(None, '(UNSEEN SUBJECT "Your Synergy One-time Passcode")')  #UNSEEN
 
         if messages[0]:
             # Get the latest email ID
@@ -61,8 +61,7 @@ def get_email_token(email_address, password, email_server, email_port, timeout=1
                         # Extract a 6-digit email token using regular expression
                         match = re.search(r'>(\d{6})<', body)
                         if match:
-                            email_token = match.group(1)
-                            # print(f"Email Token: {email_token}")
+                            email_token = match.group(1)  # print(f"Email Token: {email_token}")
             else:
                 body = msg.get_payload(decode=True).decode("utf-8")
                 # print(body)
@@ -70,8 +69,7 @@ def get_email_token(email_address, password, email_server, email_port, timeout=1
                 # Extract a 6-digit email token using regular expression
                 match = re.search(r'>(\d{6})<', body)
                 if match:
-                    email_token = match.group()
-                    # print(f"Email Token: {email_token}")
+                    email_token = match.group()  # print(f"Email Token: {email_token}")
 
             # Print the extracted email token
             if email_token:
@@ -94,7 +92,8 @@ def login_with_email_token(email_token, allow_contract):
     print("Login with email token")
     login_url = "https://selfserve.synergy.net.au/apps/rest/emailLogin/loginWithEmailToken"
     login_payload = {'emailToken': email_token}
-    login_response = requests.post(login_url, json=login_payload, headers={'Content-Type': 'application/json', 'Allow-Contract': allow_contract})
+    login_response = requests.post(login_url, json=login_payload,
+                                   headers={'Content-Type': 'application/json', 'Allow-Contract': allow_contract})
     return login_response
 
 
@@ -135,8 +134,7 @@ def get_device_id(contract_account_number, cookies):
 # Function to get usage data
 def get_usage_data(contract_account_number, device_id, start_date, end_date, cookies):
     print("Getting usage data")
-    usage_json_url = f"https://selfserve.synergy.net.au/apps/rest/intervalData/{contract_account_number}/getHalfHourlyElecIntervalData?intervalDeviceIds={device_id}&startDate={
-        start_date.strftime("%Y-%m-%d")}&endDate={end_date.strftime("%Y-%m-%d")}"
+    usage_json_url = f'https://selfserve.synergy.net.au/apps/rest/intervalData/{contract_account_number}/getHalfHourlyElecIntervalData?intervalDeviceIds={device_id}&startDate={start_date.strftime("%Y-%m-%d")}&endDate={end_date.strftime("%Y-%m-%d")}'
     usage_json_response = requests.get(usage_json_url, cookies=cookies)
     if usage_json_response.status_code == 200:
         json_data = usage_json_response.json()
@@ -149,6 +147,79 @@ def get_usage_data(contract_account_number, device_id, start_date, end_date, coo
         raise Exception(f"Failed to retrieve usage data. Status code: {usage_json_response.status_code}")
 
 
+def poll(premise_id, email_address, password, email_server, email_port=9):
+    login_email_response = send_email_token(premise_id, email_address)
+    if login_email_response.status_code == 200:
+        email_token = get_email_token(email_address, password, email_server, email_port)
+        if email_token:
+            login_response = login_with_email_token(email_token, login_email_response.headers.get("Allow-Contract"))
+            if login_response.status_code == 200:
+                print("Login successful!")
+                cookies = login_response.cookies
+                contract_account_number = get_contract_account_number(cookies)
+                if contract_account_number:
+                    device_id = get_device_id(contract_account_number, cookies)
+                    if device_id:
+                        usage_data = get_usage_data(contract_account_number, device_id, start_date, end_date, cookies)
+                        return usage_data
+            else:
+                raise Exception("Failed to login with email token.")
+    elif login_email_response.status_code == 400 and "you have had too many attempts" in login_email_response.text:
+        print("Too many attempts, try again tomorrow.")
+    else:
+        raise Exception("Web server response did not meet expected conditions.")
+
+
+def build_dict(timestamps, key_names, *value_lists):
+    # Check if lengths of input lists are consistent
+    lengths = set(len(lst) for lst in [timestamps, *value_lists])
+    if len(lengths) != 1:
+        raise ValueError("Lengths of input lists must be the same")
+
+    if len(value_lists) != len(key_names):
+        raise ValueError("Keys and values must have the same length")
+
+    # Initialize an empty dictionary
+    result_dict = {}
+
+    # Iterate over timestamps and value lists simultaneously using zip
+    for items in zip(timestamps, *value_lists):
+        timestamp = items[0]
+        values = items[1:]
+        # If timestamp is not already a key in the dictionary, add it with an empty dict as value
+        if timestamp not in result_dict:
+            result_dict[timestamp] = {}
+
+        # Add values to the dictionary associated with the timestamp key
+        for key_name, value in zip(key_names, values):
+            result_dict[timestamp][key_name] = value
+
+    return result_dict
+
+
+def parse(usage_data):
+    usage = [value if value is not None else 0 for value in usage_data['kwHalfHourlyValues']]
+    generation = [value if value is not None else 0 for value in usage_data['kwhHalfHourlyValuesGeneration']]
+    peak_kwh = [value if value is not None else 0 for value in usage_data['peakKwhHalfHourlyValues']]
+    off_peak_kwh = [value if value is not None else 0 for value in usage_data['offpeakKwhHalfHourlyValues']]
+    kw = [value if value is not None else 0 for value in usage_data['kwHalfHourlyValues']]
+    kva = [value if value is not None else 0 for value in usage_data['kvaHalfHourlyValues']]
+    power_factor = [value if value is not None else 0 for value in usage_data['powerFactorHalfHourlyValues']]
+    load_factor = [value if value is not None else 0 for value in usage_data['loadFactorHalfHourlyValues']]
+
+    temp_time = start_time
+    timestamps = []
+    for ii in range(0, len(usage)):
+        timestamps.append(temp_time.strftime('%Y-%m-%dT%H:%M'))
+        temp_time += datetime.timedelta(minutes=30)
+
+    parsed_usage_data = build_dict(timestamps,
+        ["usage", "generation", "peak_kwh", "off_peak_kwh", "kw", "kva", "power_factor", "load_factor"], usage,
+        generation, peak_kwh, off_peak_kwh, kw, kva, power_factor, load_factor)
+
+    return parsed_usage_data
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 6:
         print("Usage: python script.py <premise_id> <email_address> <password> <email_server> <email_port>")
@@ -158,7 +229,12 @@ if __name__ == "__main__":
     email_address = sys.argv[2]
     password = sys.argv[3]
     email_server = sys.argv[4]
-    email_port = int(sys.argv[5])
+
+    try:
+        email_port = int(sys.argv[5])
+    except ValueError:
+        print("Error: email_port must be a non-empty integer.")
+        sys.exit(1)
 
     # Perform type and existence checks
     if not premise_id or not isinstance(premise_id, str):
@@ -177,29 +253,10 @@ if __name__ == "__main__":
         print("Error: email_server must be a non-empty string.")
         sys.exit(1)
 
-    if len(sys.argv) >= 7:
-        if not email_port:
-            print("Error: email_port must be a non-empty integer.")
-            sys.exit(1)
+    if not email_port or not isinstance(email_port, int):
+        print("Error: email_port must be a non-empty integer.")
+        sys.exit(1)
 
-    login_email_response = send_email_token(premise_id, email_address)
-    if login_email_response.status_code == 200:
-        email_token = get_email_token(email_address, password, email_server, email_port)
-        if email_token:
-            login_response = login_with_email_token(email_token, login_email_response.headers.get("Allow-Contract"))
-            if login_response.status_code == 200:
-                # print("Login successful!")
-                cookies = login_response.cookies
-                contract_account_number = get_contract_account_number(cookies)
-                if contract_account_number:
-                    device_id = get_device_id(contract_account_number, cookies)
-                    if device_id:
-                        usage_data = get_usage_data(contract_account_number, device_id, start_date, end_date, cookies)
-                        print(usage_data)
-                        print(usage_data)
-            else:
-                raise Exception("Failed to login with email token.")
-    elif login_email_response.status_code == 400 and "you have had too many attempts" in login_email_response.text:
-        print("Too many attempts, try again tomorrow.")
-    else:
-        raise Exception("Web server response did not meet expected conditions.")
+    usage_data = poll(premise_id, email_address, password, email_server, email_port)
+    parsed_usage_data = parse(usage_data)
+    print(parsed_usage_data)

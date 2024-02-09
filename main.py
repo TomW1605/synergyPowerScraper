@@ -1,37 +1,46 @@
 import datetime
-import requests
-import json
 import sys
 
-username = sys.argv[1]
-password = sys.argv[2]
+from SynergyDataFetcher import SynergyDataFetcher
 
-startDate = (datetime.date.today() - datetime.timedelta(days=2))
-startTime = datetime.datetime.combine(startDate, datetime.datetime.min.time())
-endDate = datetime.date.today()
+if len(sys.argv) < 6:
+    print("Usage: python script.py <premise_id> <email_address> <password> <email_server> <email_port>")
+    sys.exit(1)
 
-loginURL = "https://selfserve.synergy.net.au/apps/rest/session/login.json"
-loginPayload = {'username': username, 'password': password}
-loginResponse = requests.request("POST", loginURL, data=loginPayload)
-loginData = loginResponse.json()
+premise_id = sys.argv[1]
+email_address = sys.argv[2]
+password = sys.argv[3]
+email_server = sys.argv[4]
 
-accountURL = "https://selfserve.synergy.net.au/apps/rest/account/" + loginData['accountList'][0]['contractAccountNumber'] + "/show.json"
-accountResponse = requests.request("POST", accountURL, cookies=loginResponse.cookies, data={})
-accountData = accountResponse.json()
+try:
+    email_port = int(sys.argv[5])
+except ValueError:
+    print("Error: email_port must be a non-empty integer.")
+    sys.exit(1)
 
-dataURL = "https://selfserve.synergy.net.au/apps/rest/intervalData/" + loginData['accountList'][0]['contractAccountNumber'] + \
-          "/getHalfHourlyElecIntervalData?intervalDeviceIds=" + accountData['installationDetails']['intervalDevices'][0]['deviceId'] + \
-          "&startDate=" + startDate.strftime("%Y-%m-%d") + "&endDate=" + endDate.strftime("%Y-%m-%d")
+# Perform type and existence checks
+if not premise_id or not isinstance(premise_id, str):
+    print("Error: premise_id must be a non-empty string.")
+    sys.exit(1)
 
-dataResponse = requests.request("GET", dataURL, cookies=loginResponse.cookies, data={})
+if not email_address or not isinstance(email_address, str):
+    print("Error: email_address must be a non-empty string.")
+    sys.exit(1)
 
-#print(json.dumps(dataResponse.json(), indent=2))
+if not password or not isinstance(password, str):
+    print("Error: password must be a non-empty string.")
+    sys.exit(1)
 
-time = startTime
-usage = {}
-rawUsage = dataResponse.json()["kwHalfHourlyValues"]
-rawGeneration = dataResponse.json()["kwhHalfHourlyValuesGeneration"]
-print("time\tkwhHalfHourlyValues\tkwhHalfHourlyValuesGeneration")
-for ii in range(0, len(rawUsage)):
-    print(f"{time.strftime('%Y-%m-%dT%H:%M')}\t{round(rawUsage[ii]*0.5,2)}\t{round(rawGeneration[ii],2)}")
-    time += datetime.timedelta(minutes=30)
+if not email_server or not isinstance(email_server, str):
+    print("Error: email_server must be a non-empty string.")
+    sys.exit(1)
+
+if not email_port or not isinstance(email_port, int):
+    print("Error: email_port must be a non-empty integer.")
+    sys.exit(1)
+
+from test_data import usage_data
+synergy_fetcher = SynergyDataFetcher(premise_id, email_address, password, email_server, email_port, usage_data)
+# synergy_fetcher.fetch(datetime.date.today() - datetime.timedelta(days=2))
+parsed_usage_data = synergy_fetcher.parse()
+print(parsed_usage_data)
