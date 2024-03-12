@@ -39,8 +39,8 @@ if not email_port or not isinstance(email_port, int):
     print("Error: email_port must be a non-empty integer.")
     sys.exit(1)
 
-from test_data import usage_data
-synergy_fetcher = SynergyDataFetcher(premise_id, email_address, password, email_server, email_port, usage_data)
-# synergy_fetcher.fetch(datetime.date.today() - datetime.timedelta(days=2))
+# from test_data import usage_data
+synergy_fetcher = SynergyDataFetcher(premise_id, email_address, password, email_server, email_port) #, usage_data)
+raw_usage_data = synergy_fetcher.fetch(datetime.date.today() - datetime.timedelta(days=4), datetime.date.today())
 parsed_usage_data = synergy_fetcher.parse()
 print(parsed_usage_data)
