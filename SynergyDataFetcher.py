@@ -1,7 +1,7 @@
 import re
 import time
 import datetime
-import requests
+import httpx
 import imaplib
 import email
 import sys
@@ -15,6 +15,7 @@ class SynergyDataFetcher:
         self.email_server = email_server
         self.email_port = email_port
         self._usage_data = usage_data
+        self._client = httpx.Client()
 
     def fetch(self, start_date, end_date=datetime.date.today()):
         login_email_response = self._send_email_token()
@@ -25,13 +26,12 @@ class SynergyDataFetcher:
                                                               login_email_response.headers.get("Allow-Contract"))
                 if login_response.status_code == 200:
                     print("Login successful!")
-                    cookies = login_response.cookies
-                    contract_account_number = self._get_contract_account_number(cookies)
+                    contract_account_number = self._get_contract_account_number()
                     if contract_account_number:
-                        device_id = self._get_device_id(contract_account_number, cookies)
+                        device_id = self._get_device_id(contract_account_number)
                         if device_id:
                             self._usage_data = self._get_usage_data(contract_account_number, device_id, start_date,
-                                                                    end_date, cookies)
+                                                                    end_date)
 
                             start_time = datetime.datetime.combine(start_date, datetime.datetime.min.time())
                             self._usage_data["timestamps"] = []
@@ -56,15 +56,14 @@ class SynergyDataFetcher:
         generation = [value if value is not None else 0 for value in usage_data['kwhHalfHourlyValuesGeneration']]
         peak_kwh = [value if value is not None else 0 for value in usage_data['peakKwhHalfHourlyValues']]
         off_peak_kwh = [value if value is not None else 0 for value in usage_data['offpeakKwhHalfHourlyValues']]
-        kw = [value if value is not None else 0 for value in usage_data['kwHalfHourlyValues']]
         kva = [value if value is not None else 0 for value in usage_data['kvaHalfHourlyValues']]
         power_factor = [value if value is not None else 0 for value in usage_data['powerFactorHalfHourlyValues']]
         load_factor = [value if value is not None else 0 for value in usage_data['loadFactorHalfHourlyValues']]
 
-        parsed_usage_data = self._build_dict(usage_data["timestamps"],
-                                             ["usage", "generation", "peak_kwh", "off_peak_kwh", "kw", "kva",
-                                              "power_factor", "load_factor"], usage, generation, peak_kwh, off_peak_kwh,
-                                             kw, kva, power_factor, load_factor)
+        parsed_usage_data = self._build_data_list(
+            ["timestamp", "usage", "generation", "peak_kwh", "off_peak_kwh", "kva", "power_factor",
+             "load_factor"], usage_data["timestamps"], usage, generation, peak_kwh, off_peak_kwh, kva, power_factor,
+            load_factor)
 
         return parsed_usage_data
 
@@ -72,7 +71,7 @@ class SynergyDataFetcher:
         print("Sending email token")
         login_url = "https://selfserve.synergy.net.au/apps/rest/emailLogin/getEmailToken"
         login_payload = {'emailAddress': self.email_address, 'premiseId': self.premise_id}
-        login_response = requests.post(login_url, data=login_payload)
+        login_response = self._client.post(login_url, data=login_payload)
         return login_response
 
     def _get_email_token(self, timeout=180):
@@ -142,14 +141,14 @@ class SynergyDataFetcher:
         print("Login with email token")
         login_url = "https://selfserve.synergy.net.au/apps/rest/emailLogin/loginWithEmailToken"
         login_payload = {'emailToken': email_token}
-        login_response = requests.post(login_url, json=login_payload,
+        login_response = self._client.post(login_url, json=login_payload,
                                        headers={'Content-Type': 'application/json', 'Allow-Contract': allow_contract})
         return login_response
 
-    def _get_contract_account_number(self, cookies):
+    def _get_contract_account_number(self):
         print("Getting contract account number")
         index_json_url = "https://selfserve.synergy.net.au/apps/rest/account/index.json"
-        index_json_response = requests.get(index_json_url, cookies=cookies)
+        index_json_response = self._client.get(index_json_url)
         if index_json_response.status_code == 200:
             json_data = index_json_response.json()
             contract_account_number = json_data[0]['contractAccountNumber']
@@ -162,10 +161,10 @@ class SynergyDataFetcher:
             raise Exception(
                 f"Failed to retrieve contract account number. Status code: {index_json_response.status_code}")
 
-    def _get_device_id(self, contract_account_number, cookies):
+    def _get_device_id(self, contract_account_number):
         print("Getting device ID")
         account_json_url = f"https://selfserve.synergy.net.au/apps/rest/account/{contract_account_number}/show.json"
-        account_json_response = requests.get(account_json_url, cookies=cookies)
+        account_json_response = self._client.get(account_json_url)
         if account_json_response.status_code == 200:
             json_data = account_json_response.json()
             device_id = json_data['installationDetails']['intervalDevices'][0]['deviceId']
@@ -177,10 +176,12 @@ class SynergyDataFetcher:
         else:
             raise Exception(f"Failed to retrieve device ID. Status code: {account_json_response.status_code}")
 
-    def _get_usage_data(self, contract_account_number, device_id, start_date, end_date, cookies):
+    def _get_usage_data(self, contract_account_number, device_id, start_date, end_date):
         print("Getting usage data")
-        usage_json_url = f'https://selfserve.synergy.net.au/apps/rest/intervalData/{contract_account_number}/getHalfHourlyElecIntervalData?intervalDeviceIds={device_id}&startDate={start_date.strftime("%Y-%m-%d")}&endDate={end_date.strftime("%Y-%m-%d")}'
-        usage_json_response = requests.get(usage_json_url, cookies=cookies)
+        usage_json_url = (f'https://selfserve.synergy.net.au/apps/rest/intervalData/'
+                          f'{contract_account_number}/getHalfHourlyElecIntervalData?intervalDeviceIds={device_id}&startDate={start_date.strftime("%Y-%m-%d")}&endDate='
+                          f'{end_date.strftime("%Y-%m-%d")}')
+        usage_json_response = self._client.get(usage_json_url)
         if usage_json_response.status_code == 200:
             json_data = usage_json_response.json()
             if json_data:
@@ -191,9 +192,9 @@ class SynergyDataFetcher:
         else:
             raise Exception(f"Failed to retrieve usage data. Status code: {usage_json_response.status_code}")
 
-    def _build_dict(self, timestamps, key_names, *value_lists):
+    def _build_data_list(self, key_names, *value_lists):
         # Check if lengths of input lists are consistent
-        lengths = set(len(lst) for lst in [timestamps, *value_lists])
+        lengths = set(len(lst) for lst in value_lists)
         if len(lengths) != 1:
             raise ValueError("Lengths of input lists must be the same")
 
@@ -201,21 +202,16 @@ class SynergyDataFetcher:
             raise ValueError("Keys and values must have the same length")
 
         # Initialize an empty dictionary
-        result_dict = {}
+        result_list = []
 
         # Iterate over timestamps and value lists simultaneously using zip
-        for items in zip(timestamps, *value_lists):
-            timestamp = items[0]
-            values = items[1:]
-            # If timestamp is not already a key in the dictionary, add it with an empty dict as value
-            if timestamp not in result_dict:
-                result_dict[timestamp] = {}
-
-            # Add values to the dictionary associated with the timestamp key
+        for values in zip(*value_lists):
+            value_dict = {}
             for key_name, value in zip(key_names, values):
-                result_dict[timestamp][key_name] = value
+                value_dict[key_name] = value
+            result_list.append(value_dict)
 
-        return result_dict
+        return result_list
 
 
 if __name__ == "__main__":
